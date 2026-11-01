@@ -35,12 +35,13 @@ It covers the full data engineering lifecycle: cloud-to-cloud ingestion, governe
 
 ```mermaid
 flowchart LR
-    A[(AWS S3<br/>Raw Data ~52 GB)] -->|ADF Binary Copy| B[(ADLS Gen2<br/>Landing)]
-    B --> C[🥉 Bronze<br/>Raw + Audit Metadata]
-    C --> D[🥈 Silver<br/>Conformed & CDC]
-    D --> E[🥇 Gold<br/>Business Marts]
-    C -. bad records .-> Q[(DLQ Quarantine)]
-    UC{{Unity Catalog<br/>Governance & Lineage}} -.- C
+    A[("AWS S3<br/>Raw Data, 52 GB")] -->|"ADF Binary Copy"| B[("ADLS Gen2<br/>Landing")]
+    B --> C["Bronze<br/>Raw + Audit Metadata"]
+    C --> D["Silver<br/>Conformed and CDC"]
+    D --> E["Gold<br/>Business Marts"]
+    C -.->|"bad records"| Q[("DLQ Quarantine")]
+    UC["Unity Catalog<br/>Governance and Lineage"]
+    UC -.- C
     UC -.- D
     UC -.- E
 ```
