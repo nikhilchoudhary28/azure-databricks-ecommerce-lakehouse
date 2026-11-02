@@ -33,7 +33,7 @@ Multi-domain e-commerce data lands in **Azure Data Lake Storage Gen2** and flows
 
 | Layer | What it delivers |
 |---|---|
-| **Bronze** | Automated batch ingestion into Delta tables with audit metadata |
+| **Bronze** | Automated batch ingestion into Delta tables with audit metadata, plus a dead-letter queue (DLQ) audit for bad records |
 | **Silver** | Conformed dimensions and facts: SCD Type 2 with point-in-time joins, catalog harmonization, and a financial ledger with CDC states |
 | **Gold** | Business marts for RFM customer segmentation, sales and fulfillment KPIs, and daily financial reconciliation |
 
@@ -47,6 +47,8 @@ A dedicated test notebook validates data contracts across all layers after each 
 flowchart TD
     SRC[("AWS S3<br/>Source data")] -->|"Azure Data Factory copy"| L1[("ADLS Gen2 landing<br/>landing/raw_feeds")]
     L1 -->|"Dynamic batch read"| B1[("bronze.* Delta tables<br/>_ingested_at, _source_file")]
+
+    L1 -.->|"Malformed records"| Q1[("DLQ quarantine<br/>02_dead_letter_queue_audit")]
 
     G0["00 Setup and Governance<br/>Schemas, tags, column masking"] -.-> B1
 
@@ -92,7 +94,8 @@ azure-databricks-ecommerce-lakehouse/
 ├── 00_Setup_and_Governance/
 │   └── 01_unity_catalog_governance_setup.ipynb
 ├── 01_Bronze/
-│   └── 01_raw_batch_ingestion.ipynb
+│   ├── 01_raw_batch_ingestion.ipynb
+│   └── 02_dead_letter_queue_audit.ipynb
 ├── 02_Silver/
 │   ├── 01_dim_customers_scd2.ipynb
 │   ├── 02_dim_products_catalog.ipynb
@@ -119,9 +122,14 @@ azure-databricks-ecommerce-lakehouse/
 - Applies compliance tags such as `tier`, `lifecycle`, `contains_raw_pii`, and `scd_pattern`.
 - Enforces column-level PII protection with a SQL masking function (`silver.mask_email`) so only authorized roles see raw customer emails.
 
-### 01. Bronze Layer (Raw Ingestion)
+### 01. Bronze Layer (Raw Ingestion and DLQ Audit)
 
-**Notebook:** `01_Bronze/01_raw_batch_ingestion.ipynb`
+| Notebook | Purpose |
+|---|---|
+| `01_raw_batch_ingestion` | Batch ingestion from ADLS Gen2 into managed Delta tables with audit metadata |
+| `02_dead_letter_queue_audit` | Isolates records that fail ingestion into a quarantine (dead-letter) table so bad data is audited instead of silently dropped |
+
+#### `01_Bronze/01_raw_batch_ingestion.ipynb`
 
 - Traverses the ADLS Gen2 landing container and groups multi-file entity domains (customers, items, orders, addresses) into target tables.
 - Adds audit metadata to every record:
@@ -132,6 +140,12 @@ azure-databricks-ecommerce-lakehouse/
 | `_source_file` | Source file path, captured from `_metadata.file_path` |
 
 - Writes all raw feeds as managed Delta tables under `bronze.*`.
+
+#### `01_Bronze/02_dead_letter_queue_audit.ipynb`
+
+- Detects malformed or corrupted records (for example, broken CSV rows or schema drift) from the raw feeds.
+- Routes them to a dead-letter quarantine table instead of the main bronze tables, so one bad row cannot break a load.
+- Keeps rejected records available for review, reprocessing, and data-quality reporting.
 
 ### 02. Silver Layer (Conformed Dimensions and Facts)
 
@@ -199,6 +213,7 @@ Test Summary: 11 PASSED, 0 FAILED
 - **Deterministic surrogate keys:** SHA-256 hashes over natural keys and validity timestamps (`customer_sk`, `product_sk`, `fact_order_sk`, `ledger_sk`) avoid auto-increment bottlenecks in a distributed engine.
 - **Point-in-time dimension lookups:** date-range joins keep historical reports accurate when customers change address.
 - **Physical layout optimization:** Silver and Gold models run `OPTIMIZE ... ZORDER BY` on common filter and join columns for better file pruning.
+- **Dead-letter queue pattern:** malformed records are quarantined and audited rather than dropped or allowed to fail the pipeline.
 - **Governance as code:** tags and dynamic column masking are applied programmatically so privacy controls are reproducible.
 
 ---
@@ -223,8 +238,9 @@ Test Summary: 11 PASSED, 0 FAILED
 3. Run the notebooks in this order:
    1. `00_Setup_and_Governance/01_unity_catalog_governance_setup.ipynb`
    2. `01_Bronze/01_raw_batch_ingestion.ipynb`
-   3. `02_Silver/` notebooks `01` through `04`
-   4. `03_Gold/` notebooks `01` through `03`
+   3. `01_Bronze/02_dead_letter_queue_audit.ipynb`
+   4. `02_Silver/` notebooks `01` through `04`
+   5. `03_Gold/` notebooks `01` through `03`
 4. Run `tests/test_data_quality_suite.ipynb` to verify the data contracts.
 
 ---
